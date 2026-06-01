@@ -2,91 +2,119 @@ package config
 
 import (
 	"database/sql"
+	"fmt"
+	"log"
+
+	"time"
+
 	"os"
+
 	"path/filepath"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const DefaultDBPath = "data/agent-ledger.db"
-
-func DatabasePath() string {
-	if path := os.Getenv("AGENT_LEDGER_DB_PATH"); path != "" {
-		return path
+func GetDBConnection() *sql.DB {
+	log.Print("DB_DRIVER=", os.Getenv("DB_DRIVER"))
+	d := Database{
+		host:     os.Getenv("DB_HOST"),
+		username: os.Getenv("DB_USERNAME"),
+		password: os.Getenv("DB_PASSWORD"),
+		driver:   os.Getenv("DB_DRIVER"),
+		port:     os.Getenv("DB_PORT"),
+		dbname:   os.Getenv("DB_NAME"),
 	}
 
-	return DefaultDBPath
+	db, err := d.connectDB()
+	if err != nil {
+		log.Fatal("Database connection failed: ", err)
+	}
+	return db
 }
 
-func OpenSQLite(path string) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, err
+type Database struct {
+	host     string
+	port     string
+	username string
+	password string
+	driver   string
+	dbname   string
+}
+
+func (d Database) connectPostgreSQL() (*sql.DB, error) {
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		d.username,
+		d.password,
+		d.host,
+		d.port,
+		d.dbname,
+	)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open Postgres DB: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		return nil, err
-	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
 
 	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
+
+		if err := db.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close the postgres db: %w", err)
+		}
+
+		return nil, fmt.Errorf("failed to ping postgres db: %w", err)
 	}
 
-	if err := configureSQLite(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
-	if err := migrateSQLite(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-
+	log.Println("Connected to Postgres successfully!")
 	return db, nil
 }
 
-func configureSQLite(db *sql.DB) error {
-	statements := []string{
-		"PRAGMA journal_mode = WAL;",
-		"PRAGMA foreign_keys = ON;",
-		"PRAGMA busy_timeout = 5000;",
+func (d Database) connectSQLite() (*sql.DB, error) {
+	dsn := fmt.Sprintf("./data/%s", d.dbname)
+
+	path := "./data/"
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create sqlite directory: %w", err)
 	}
 
-	for _, statement := range statements {
-		if _, err := db.Exec(statement); err != nil {
-			return err
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
+	}
+
+	if err := db.Ping(); err != nil {
+
+		if err := db.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close the sqlite db: %w", err)
 		}
+
+		return nil, fmt.Errorf("failed to ping sqlite db: %w", err)
 	}
 
-	return nil
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+
+		if err := db.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close the sqlite db: %w", err)
+		}
+
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
+	log.Println("Connected to SQLite successfully!")
+	return db, nil
 }
 
-func migrateSQLite(db *sql.DB) error {
-	schema := `
-CREATE TABLE IF NOT EXISTS sessions (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	agent_name TEXT NOT NULL,
-	model TEXT,
-	started_at TEXT NOT NULL DEFAULT (datetime('now')),
-	ended_at TEXT
-);
+func (d Database) connectDB() (*sql.DB, error) {
 
-CREATE TABLE IF NOT EXISTS token_usage (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	session_id INTEGER,
-	prompt_tokens INTEGER NOT NULL DEFAULT 0,
-	completion_tokens INTEGER NOT NULL DEFAULT 0,
-	total_tokens INTEGER NOT NULL DEFAULT 0,
-	estimated_cost_cents INTEGER NOT NULL DEFAULT 0,
-	recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
-	FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_token_usage_recorded_at
-ON token_usage(recorded_at);
-`
-
-	_, err := db.Exec(schema)
-	return err
+	switch d.driver {
+	case "postgres":
+		return d.connectPostgreSQL()
+	case "sqlite":
+		return d.connectSQLite()
+	default:
+		return nil, fmt.Errorf("unsupported database driver: %s", d.driver)
+	}
 }

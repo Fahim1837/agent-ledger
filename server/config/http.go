@@ -4,57 +4,41 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 )
 
-const DefaultHTTPAddr = ":9000"
-
-func HTTPAddr() string {
-	if addr := os.Getenv("AGENT_LEDGER_HTTP_ADDR"); addr != "" {
-		return addr
+func GetApplication(db *sql.DB) *Application {
+	app := &Application{
+		DB: db,
 	}
 
-	return DefaultHTTPAddr
+	return app
+}
+
+func BuildRouter(app *Application) http.Handler {
+	mux := http.NewServeMux()
+
+	routes := app.Routes(mux)
+	return routes
+}
+
+func StartHTTPServer(route http.Handler) {
+	host, port := os.Getenv("HOST"), os.Getenv("PORT")
+	addr := fmt.Sprintf("%s:%s", host, port)
+
+	log.Printf("Server starting at http://%s", addr)
+	err := http.ListenAndServe(addr, route)
+	if err != nil {
+		log.Fatal("Failed to start the Server: ", err)
+	}
 }
 
 type Application struct {
-	DB  *sql.DB
-	Hub *EventHub
-}
-
-func NewApplication(db *sql.DB, hub *EventHub) *Application {
-	return &Application{
-		DB:  db,
-		Hub: hub,
-	}
-}
-
-func NewHTTPServer(addr string, app *Application) *http.Server {
-	if addr == "" {
-		addr = DefaultHTTPAddr
-	}
-
-	return &http.Server{
-		Addr:         addr,
-		Handler:      app.Routes(),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-}
-
-func StartHTTPServer(server *http.Server) <-chan error {
-	errs := make(chan error, 1)
-
-	go func() {
-		log.Printf("agent-ledger server listening on http://localhost%s", server.Addr)
-		errs <- server.ListenAndServe()
-	}()
-
-	return errs
+	DB *sql.DB
 }
 
 func ShutdownHTTPServer(server *http.Server) error {
@@ -64,13 +48,11 @@ func ShutdownHTTPServer(server *http.Server) error {
 	return server.Shutdown(ctx)
 }
 
-func (app *Application) Routes() http.Handler {
-	mux := http.NewServeMux()
+func (app *Application) Routes(mux *http.ServeMux) http.Handler {
 
-	mux.HandleFunc("GET /", app.handleIndex)
-	mux.HandleFunc("GET /health", app.handleHealth)
-	mux.HandleFunc("GET /api/health", app.handleHealth)
-	mux.HandleFunc("GET /ws", app.handleWebSocket)
+	mux.HandleFunc("/", app.handleIndex)
+	mux.HandleFunc("/health", app.handleHealth)
+	mux.HandleFunc("/api/health", app.handleHealth)
 
 	return mux
 }

@@ -30,3 +30,5 @@ data/
 *.db-shm
 *.db-wal
 *tmp
+
+*.env*
