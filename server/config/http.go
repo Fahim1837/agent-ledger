@@ -11,11 +11,11 @@ import (
 )
 
 func GetApplication(db *sql.DB) *Application {
-	app := &Application{
+	app := Application{
 		DB: db,
 	}
 
-	return app
+	return &app
 }
 
 func BuildRouter(app *Application) http.Handler {
