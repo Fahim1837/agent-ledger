@@ -6,6 +6,12 @@ import (
 	"net/http"
 )
 
+type Router interface {
+	http.Handler
+	Handle(pattern string, handler http.Handler)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
@@ -27,15 +33,15 @@ func (app *Application) Routes(mux *http.ServeMux) http.Handler {
 	return mux
 }
 
-func (app *Application) registerHealthRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /health", app.handleHealth)
+func (app *Application) registerHealthRoutes(router Router) {
+	router.HandleFunc("GET /health", app.handleHealth)
 }
 
-func (app *Application) registerPostRoutes(mux *http.ServeMux) {
+func (app *Application) registerPostRoutes(router Router) {
 
 }
 
-func (app *Application) registerUserRoutes(mux *http.ServeMux) {
+func (app *Application) registerUserRoutes(router Router) {
 
 }
 
